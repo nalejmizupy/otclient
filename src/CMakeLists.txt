@@ -132,6 +132,7 @@ find_package(ZLIB REQUIRED)
 find_package(httplib CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(utf8cpp REQUIRED)
+find_package(Freetype REQUIRED)
 find_package(unofficial-inih CONFIG REQUIRED)
 
 find_path(CPPCODEC_INCLUDE_DIRS "cppcodec/base32_crockford.hpp")
@@ -557,6 +558,7 @@ if(MSVC)
           pugixml::pugixml
           fmt::fmt-header-only
           utf8cpp::utf8cpp
+          Freetype::Freetype
   )
 elseif(ANDROID)
   target_include_directories(otclient_core

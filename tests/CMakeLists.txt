@@ -36,6 +36,7 @@ function(otclient_add_gtest TARGET_NAME)
             FRAMEWORK_NET
             FRAMEWORK_SOUND
             FRAMEWORK_XML
+            OTCLIENT_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     )
 
     if(MSVC)
@@ -52,3 +53,4 @@ endfunction()
 
 add_subdirectory(map)
 add_subdirectory(stdext)
+add_subdirectory(font)

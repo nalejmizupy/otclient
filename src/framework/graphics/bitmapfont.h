@@ -32,6 +32,7 @@ public:
     BitmapFont(const std::string_view name) : m_name(name) {}
 
     void load(const OTMLNodePtr& fontNode);
+    bool loadTrueType(const std::string& fontPath, int size);
 
     void drawText(std::string_view text, const Point& startPos, const Color& color = Color::white);
     void drawText(std::string_view text, const Rect& screenCoords, const Color& color = Color::white, Fw::AlignmentFlag align = Fw::AlignTopLeft);

@@ -85,6 +85,85 @@ BitmapFontPtr FontManager::getFont(const std::string_view fontName)
             return font;
     }
 
+    // Try to load TTF dynamically: "Family-SizePx" or "Family-Size"
+    std::string name(fontName);
+    int size = 0;
+    std::string family;
+
+    size_t dashPos = name.rfind('-');
+    if (dashPos != std::string::npos && dashPos + 1 < name.size()) {
+        std::string suffix = name.substr(dashPos + 1);
+
+        // Strip "px" if present
+        if (suffix.size() > 2 && suffix.substr(suffix.size() - 2) == "px") {
+            suffix = suffix.substr(0, suffix.size() - 2);
+        }
+
+        // Check if suffix is a number
+        bool isNum = !suffix.empty();
+        for (char c : suffix) {
+            if (c < '0' || c > '9') {
+                isNum = false;
+                break;
+            }
+        }
+
+        if (isNum) {
+            size = std::atoi(suffix.c_str());
+            family = name.substr(0, dashPos);
+        }
+    }
+
+    if (size > 0 && !family.empty()) {
+        std::vector<std::string> candidates;
+        candidates.push_back(family);
+        candidates.push_back(name);
+        // Try paths with leading slash as seen in styles.lua ('/fonts/...')
+        candidates.push_back("/fonts/" + family);
+        candidates.push_back("/data/fonts/" + family);
+
+        // Also try relative (just in case)
+        candidates.push_back("fonts/" + family);
+        candidates.push_back("data/fonts/" + family);
+
+        // Try lower-case version of family if different
+        std::string lowerFamily = family;
+        std::transform(lowerFamily.begin(), lowerFamily.end(), lowerFamily.begin(), ::tolower);
+        if (lowerFamily != family) {
+            candidates.push_back(lowerFamily);
+            candidates.push_back("/fonts/" + lowerFamily);
+            candidates.push_back("/data/fonts/" + lowerFamily);
+            candidates.push_back("fonts/" + lowerFamily);
+            candidates.push_back("data/fonts/" + lowerFamily);
+        }
+
+        std::string path;
+        for (const auto& cand : candidates) {
+            std::string guess = g_resources.guessFilePath(cand, "ttf");
+            g_logger.info("Checking font candidate: '{}' -> '{}'", cand, guess);
+            if (!guess.empty() && g_resources.fileExists(guess)) {
+                path = guess;
+                break;
+            }
+        }
+
+        if (!path.empty()) {
+            g_logger.info("Loading TrueType font '{}' from path '{}'", name, path);
+            BitmapFontPtr font = std::make_shared<BitmapFont>(name);
+            if (font->loadTrueType(path, size)) {
+                m_fonts.push_back(font);
+                return font;
+            } else {
+                g_logger.error("Failed to load TrueType font content from '{}'", path);
+            }
+        } else {
+            g_logger.error("Could not find any TrueType font file for '{}' (Size: {})", name, size);
+            for (const auto& cand : candidates) {
+                g_logger.error("  Tried: '{}' -> '{}'", cand, g_resources.guessFilePath(cand, "ttf"));
+            }
+        }
+    }
+
     // when not found, fallback to default font
     g_logger.error("font '{}' not found", fontName);
     return m_defaultFont;

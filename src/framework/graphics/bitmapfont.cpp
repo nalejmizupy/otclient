@@ -29,6 +29,13 @@
 #include "textureatlas.h"
 #include "texturemanager.h"
 #include "framework/otml/otmlnode.h"
+#include "framework/core/resourcemanager.h"
+
+#include <cstring>
+#include <ft2build.h>
+#include FT_FREETYPE_H
+
+static FT_Library s_ftLibrary = nullptr;
 
 static thread_local std::vector<Point> s_glyphsPositions(1);
 static thread_local std::vector<int>   s_lineWidths(1);
@@ -546,4 +553,170 @@ void BitmapFont::updateColors(std::vector<std::pair<int, Color>>* colors, const 
 
 const AtlasRegion* BitmapFont::getAtlasRegion() const noexcept {
     return m_texture ? m_texture->getAtlasRegion() : nullptr;
+}
+
+bool BitmapFont::loadTrueType(const std::string& fontPath, int size)
+{
+    if (!s_ftLibrary) {
+        if (FT_Init_FreeType(&s_ftLibrary)) {
+            g_logger.error("Failed to init FreeType");
+            return false;
+        }
+    }
+
+    FT_Face face;
+    const std::string resolvedPath = g_resources.getRealPath(fontPath);
+    if (resolvedPath.empty()) {
+        g_logger.error("Failed to resolve TrueType font path '{}'", fontPath);
+        return false;
+    }
+
+    if (FT_New_Face(s_ftLibrary, resolvedPath.c_str(), 0, &face)) {
+        g_logger.error("Failed to load font from path: {}", resolvedPath);
+        return false;
+    }
+
+    FT_Set_Pixel_Sizes(face, 0, size);
+
+    m_firstGlyph = 32;
+    m_glyphHeight = size;
+    if (face->size->metrics.height > 0) {
+        m_glyphHeight = face->size->metrics.height >> 6;
+    }
+
+    int ascender = face->size->metrics.ascender >> 6;
+
+    // Atlas packing
+    int atlasW = 512;
+    int x = 2; // initial padding
+    int y = 2;
+    int rowH = 0;
+
+    struct GlyphData {
+        int index;
+        int width;
+        int height;
+        int offsetX;
+        int offsetY;
+        std::vector<uint8_t> buffer;
+    };
+
+    std::vector<GlyphData> glyphs;
+    glyphs.resize(256);
+
+    // Pass 1: Measure and Layout
+    for (int i = 0; i < 256; ++i) {
+        if (i < 32) {
+            m_glyphsSize[i] = Size(0, 0);
+            continue;
+        }
+
+        // Handle explicit newline
+        if (i == '\n') {
+            m_glyphsSize[i] = Size(1, m_glyphHeight);
+            continue;
+        }
+
+        if (FT_Load_Char(face, i, FT_LOAD_RENDER)) {
+            m_glyphsSize[i] = Size(0, 0);
+            continue;
+        }
+
+        GlyphData& g = glyphs[i];
+        g.index = i;
+        g.width = face->glyph->bitmap.width;
+        g.height = face->glyph->bitmap.rows;
+        g.offsetX = face->glyph->bitmap_left;
+        g.offsetY = ascender - face->glyph->bitmap_top;
+
+        int advance = face->glyph->advance.x >> 6;
+        if (advance <= 0) {
+            advance = g.width + 1; // fallback
+        }
+
+        m_glyphsSize[i] = Size(advance, m_glyphHeight);
+
+        g.buffer.resize(g.width * g.height);
+        if (g.width > 0 && g.height > 0) {
+            for (int r = 0; r < g.height; ++r) {
+                memcpy(&g.buffer[r * g.width], face->glyph->bitmap.buffer + r * face->glyph->bitmap.pitch, g.width);
+            }
+        }
+
+        // Packing: Box is Advance x LineHeight (m_glyphsSize)
+        int boxW = advance;
+        int boxH = m_glyphHeight;
+
+        // If x pos + boxW exceeds width, wrap
+        if (x + boxW + 2 > atlasW) {
+            x = 2;
+            y += rowH + 2;
+            rowH = 0;
+        }
+
+        m_glyphsTextureCoords[i] = Rect(x, y, boxW, boxH);
+
+        if (boxH > rowH) {
+            rowH = boxH;
+        }
+        x += boxW + 2; // + padding
+    }
+
+    int atlasH = y + rowH + 2;
+    // ensure power of two or min size if desired, but not strictly required
+    if (atlasH < 16) {
+        atlasH = 16;
+    }
+
+    // Pass 2: Render
+    ImagePtr image = std::make_shared<Image>(Size(atlasW, atlasH));
+
+    for (int i = 32; i < 256; ++i) {
+        if (m_glyphsSize[i].width() == 0) {
+            continue;
+        }
+        if (i == '\n') {
+            continue;
+        }
+
+        Rect rect = m_glyphsTextureCoords[i];
+        GlyphData& g = glyphs[i];
+
+        if (g.width == 0 || g.height == 0) {
+            continue;
+        }
+
+        // Draw glyph into the texture box
+        // Position: rect.x + offsetX, rect.y + offsetY
+        // Clip to image bounds
+
+        for (int r = 0; r < g.height; ++r) {
+            int py = rect.y() + g.offsetY + r;
+            if (py < 0 || py >= atlasH) {
+                continue;
+            }
+
+            for (int c = 0; c < g.width; ++c) {
+                int px = rect.x() + g.offsetX + c;
+                if (px < 0 || px >= atlasW) {
+                    continue;
+                }
+
+                uint8_t alpha = g.buffer[r * g.width + c];
+                if (alpha == 0) {
+                    continue;
+                }
+
+                uint8_t pixel[4] = { 255, 255, 255, alpha };
+                image->setPixel(px, py, pixel);
+            }
+        }
+    }
+
+    FT_Done_Face(face);
+
+    m_texture = std::make_shared<Texture>(image);
+    m_texture->setSmooth(true);
+
+    return true;
 }
